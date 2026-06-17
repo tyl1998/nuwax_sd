@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/dev/workspace-03868f09 -maxdepth 3 -not -path '*/node_modules/*' -not -path '*/.git/*' | head -60)",
+      "Read(//Users/dev/**)",
+      "Read(//Users/atan/Desktop/work/vs_code_nuwax/**)",
+      "Read(//Users/atan/Desktop/work/**)",
+      "Bash(npm list *)",
+      "Bash(pip show *)",
+      "Bash(brew list *)",
+      "Bash(npm search *)",
+      "Bash(npm show *)",
+      "WebFetch(domain:github.com)",
+      "Bash(npm i *)",
+      "Bash(codegraph --version)",
+      "Bash(codegraph install *)",
+      "Bash(codegraph init *)",
+      "Bash(codegraph --help)",
+      "Bash(codegraph status *)",
+      "Bash(codegraph sync *)",
+      "Bash(pip install *)",
+      "Bash(python3 -m graphifyy --version)",
+      "Bash(graphifyy --version)"
+    ],
+    "additionalDirectories": [
+      "/Users/atan/Desktop/work/vs_code_nuwax"
+    ]
+  }
+}
