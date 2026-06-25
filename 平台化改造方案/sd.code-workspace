@@ -1,0 +1,31 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../nuwax"
+		},
+		{
+			"path": "../../nuwax-backend"
+		},
+		{
+			"path": "../../nuwax_deploy"
+		},
+		{
+			"path": "../../log-platform"
+		},
+		{
+			"path": "../../mcp-proxy"
+		},
+		{
+			"path": "../../rcoder"
+		},
+		{
+			"path": "../../nuwax_computer_deploy"
+		}
+	],
+	"settings": {
+		"java.compile.nullAnalysis.mode": "automatic"
+	}
+}
