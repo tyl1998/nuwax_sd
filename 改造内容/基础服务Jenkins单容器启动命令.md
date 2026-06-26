@@ -367,7 +367,121 @@ docker inspect -f '{{.Name}} {{range $name, $_ := .NetworkSettings.Networks}}{{$
 
 期望输出均为 `bridge`。
 
-## 9. 后端跨机器连接参数
+## 9. 后端单容器启动
+
+### 9.1 启动后端
+
+```bash
+set -e
+
+docker rm -f nuwax-backend >/dev/null 2>&1 || true
+
+docker run -d \
+  --name nuwax-backend \
+  --restart=always \
+  -p 8080:8080 \
+  -p 6443:6443 \
+  -p 18085:18085 \
+  --add-host=host.docker.internal:host-gateway \
+  -v /Users/atan/Desktop/work/vs_code_nuwax/nuwax-backend/docker/jwt:/app/config/jwt \
+  -e AI_AGENT_URL=http://host.docker.internal:8086 \
+  -e APP_PORT=8080 \
+  -e APP_PROFILE=prod \
+  -e LOG_LEVEL=INFO \
+  -e REDIS_HOST=host.docker.internal \
+  -e REDIS_PORT=16379 \
+  -e REDIS_PASSWORD=123456 \
+  -e REDIS_DB=0 \
+  -e MYSQL_HOST=host.docker.internal \
+  -e MYSQL_PORT=13306 \
+  -e MYSQL_USER=agent_platform \
+  -e MYSQL_PASSWORD=admin123 \
+  -e MYSQL_DATABASE=agent_platform \
+  -e MYSQL_ROOT_PASSWORD=root \
+  -e MILVUS_HOST=host.docker.internal \
+  -e MILVUS_PORT=19530 \
+  -e MILVUS_USER=root \
+  -e MILVUS_PASSWORD=Milvus \
+  -e MILVUS_URI=http://host.docker.internal:19530 \
+  -e ES_URL=http://host.docker.internal:9200 \
+  -e ES_USERNAME=elastic \
+  -e ES_PASSWORD=elastic123 \
+  -e LOG_SERVICE_URL=http://host.docker.internal:8097 \
+  -e MCP_PROXY_URL=http://host.docker.internal:8020 \
+  -e CODE_EXECUTE_URL=http://host.docker.internal:8020/api/run_code_with_log \
+  -e BUILD_SERVER_URL=http://host.docker.internal:60000/api \
+  -e DOCKER_PROXY_URL=http://host.docker.internal:8088 \
+  -e PROD_SERVER_HOST=http://host.docker.internal:8099 \
+  -e DEV_SERVER_HOST=http://host.docker.internal \
+  -e OUTER_PORT=6443 \
+  -e CORS_ALLOW_ORIGIN=http://localhost,http://localhost:80,http://localhost:8080 \
+  -e CORS_ALLOW_CREDENTIALS=true \
+  -e WAIT_TIMEOUT_SECONDS=120 \
+  -e DORIS_HOST=host.docker.internal \
+  -e DORIS_PORT=13306 \
+  -e DORIS_USERNAME=agent_platform \
+  -e DORIS_PASSWORD=admin123 \
+  -e DORIS_DB=agent_custom_table \
+  -e DORIS_DB_NAME=agent_custom_table \
+  nuwax-backend:test
+```
+
+> **注意**：`-p 18085:18085` 是 ComputerProxy 端口，前端通过此端口代理 VNC 桌面请求。
+
+### 9.2 验证后端
+
+```bash
+curl -s http://localhost:8080/health
+docker ps --filter name=nuwax-backend --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+```
+
+## 10. 前端单容器启动
+
+### 10.1 构建前端镜像
+
+```bash
+cd /Users/atan/Desktop/work/vs_code_nuwax/nuwax
+docker build -t nuwax-frontend:local .
+```
+
+### 10.2 启动前端
+
+```bash
+set -e
+
+docker rm -f nuwax-frontend >/dev/null 2>&1 || true
+
+docker run -d \
+  --name nuwax-frontend \
+  --restart=always \
+  -p 80:80 \
+  --add-host=host.docker.internal:host-gateway \
+  -e API_PROXY_URL=http://host.docker.internal:8080 \
+  -e COMPUTER_PROXY_URL=http://host.docker.internal:18085 \
+  nuwax-frontend:local
+```
+
+> **注意**：`COMPUTER_PROXY_URL` 指向后端的 ComputerProxy（18085 端口），用于代理 VNC 桌面请求。
+
+### 10.3 创建自定义网络并连接
+
+前端和后端需要在同一个 Docker 网络中才能通过容器名互访：
+
+```bash
+docker network create nuwax-net 2>/dev/null || true
+docker network connect nuwax-net nuwax-frontend
+docker network connect nuwax-net nuwax-backend
+```
+
+### 10.4 验证前端
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost/
+# 验证 VNC 桌面路由（返回 403 表示链路通，ComputerProxy 鉴权中）
+curl -s -o /dev/null -w "%{http_code}" http://localhost/computer/desktop/1/vnc.html
+```
+
+## 11. 后端跨机器连接参数
 
 后端单容器启动时按外部地址注入依赖，示例：
 
