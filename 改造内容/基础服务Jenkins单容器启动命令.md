@@ -204,26 +204,37 @@ docker run -d \
 ```bash
 set -e
 
-DEPLOY_DIR=/Users/atan/Desktop/work/vs_code_nuwax/nuwax_deploy/docker
-MINIO_INIT_CONTAINER=${MINIO_INIT_CONTAINER:-nuwax-minio-init}
+MINIO_CONTAINER=${MINIO_CONTAINER:-nuwax-minio}
 MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
 MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
 MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME:-quickwit-indexes}
-MINIO_SERVER_URL=${MINIO_SERVER_URL:-http://host.docker.internal:9000}
 
-docker rm -f "${MINIO_INIT_CONTAINER}" >/dev/null 2>&1 || true
+docker exec "${MINIO_CONTAINER}" mc alias set myminio http://127.0.0.1:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" --api S3v4
 
-docker run --rm \
-  --name "${MINIO_INIT_CONTAINER}" \
-  --entrypoint /bin/sh \
-  -v "${DEPLOY_DIR}/script:/scripts" \
-  -e MINIO_SERVER_URL="${MINIO_SERVER_URL}" \
-  -e MINIO_ROOT_USER="${MINIO_ROOT_USER}" \
-  -e MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}" \
-  -e MINIO_BUCKET_NAME="${MINIO_BUCKET_NAME}" \
-  minio/mc:latest \
-  -c "chmod +x /scripts/init-minio.sh && /scripts/init-minio.sh"
+if docker exec "${MINIO_CONTAINER}" mc ls "myminio/${MINIO_BUCKET_NAME}" > /dev/null 2>&1; then
+  echo "Bucket ${MINIO_BUCKET_NAME} already exists."
+else
+  docker exec "${MINIO_CONTAINER}" mc mb "myminio/${MINIO_BUCKET_NAME}"
+fi
 ```
+
+> **注意**：需先完成 5.1 并确认 MinIO 健康检查通过后再执行。该操作为一次性，bucket 创建后持久化在 data 目录中，重启 MinIO 容器无需重新执行。使用 `docker exec` 直接在 MinIO 容器内操作，彻底避免跨容器网络问题。每条命令独立执行，避免 Jenkins `/bin/sh` 对嵌套引号的解析问题。
+
+### 5.3 验证 MinIO
+
+```bash
+curl -f http://localhost:9000/minio/health/live
+```
+
+> **注意**：需先完成 5.1 并确认 MinIO 健康检查通过后再执行。该操作为一次性，bucket 创建后持久化在 data 目录中，重启 MinIO 容器无需重新执行。
+
+### 5.3 验证 MinIO
+
+```bash
+curl -f http://localhost:9000/minio/health/live
+```
+
+> **注意**：需先完成 5.1 并确认 MinIO 健康检查通过后再执行。该操作为一次性，bucket 创建后持久化在 data 目录中，重启 MinIO 容器无需重新执行。
 
 ### 5.3 验证 MinIO
 
@@ -311,7 +322,7 @@ QUICKWIT_HTTP_PORT=${QUICKWIT_HTTP_PORT:-7280}
 QUICKWIT_GRPC_PORT=${QUICKWIT_GRPC_PORT:-7281}
 MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
 MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
-QW_S3_ENDPOINT=${QW_S3_ENDPOINT:-http://host.docker.internal:9000}
+QW_S3_ENDPOINT=${QW_S3_ENDPOINT:-http://127.0.0.1:9000}
 QW_METASTORE_URI=${QW_METASTORE_URI:-s3://quickwit-indexes}
 QW_DEFAULT_INDEX_ROOT_URI=${QW_DEFAULT_INDEX_ROOT_URI:-s3://quickwit-indexes/}
 
@@ -320,8 +331,7 @@ docker rm -f "${QUICKWIT_CONTAINER}" >/dev/null 2>&1 || true
 docker run -d \
   --name "${QUICKWIT_CONTAINER}" \
   --restart=always \
-  -p "${QUICKWIT_HTTP_PORT}:7280" \
-  -p "${QUICKWIT_GRPC_PORT}:7281" \
+  --network host \
   -e TZ=Asia/Shanghai \
   -e QW_S3_ENDPOINT="${QW_S3_ENDPOINT}" \
   -e AWS_ACCESS_KEY_ID="${MINIO_ROOT_USER}" \
