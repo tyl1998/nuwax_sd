@@ -142,40 +142,102 @@
 - 使用管理员账号登录后进入 `http://localhost/home`。
 - 首页中文内容和主要接口请求正常。
 
-## 5. 验证命令
+## 5. Docker 启动命令
 
-在真实仓库 `../nuwax` 执行：
+### 使用说明
+
+前端使用 `scripts/jenkins-run-container.sh` 部署脚本，**直接运行即可，无需传变量**。脚本会自动：
+
+1. 停止并删除同名旧容器
+2. 启动新容器
+3. 等待健康检查通过（`/healthz` + `/runtime-config.js`）
+
+### 构建镜像
 
 ```bash
-pnpm build:prod
+cd /Users/atan/Desktop/work/vs_code_nuwax/nuwax
+
+# 构建镜像
+docker build -t nuwax-frontend:local .
 ```
 
-本地运行容器验证：
+### 启动容器
+
+```bash
+cd /Users/atan/Desktop/work/vs_code_nuwax/nuwax
+
+# 直接启动（使用默认参数）
+bash scripts/jenkins-run-container.sh
+```
+
+脚本内置默认参数：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `IMAGE_NAME` | `nuwax-frontend` | 镜像名 |
+| `IMAGE_TAG` | `${BUILD_NUMBER:-local}` | 镜像 tag |
+| `CONTAINER_NAME` | `nuwax-frontend` | 容器名 |
+| `HOST_PORT` | `80` | 宿主机端口 |
+| `SERVER_NAME` | `_` | Nginx server_name |
+| `API_PROXY_URL` | `http://host.docker.internal:8080` | 后端代理地址 |
+| `APP_ENV` | `prod` | 运行环境 |
+| `ROUTER_BASENAME` | 空 | 路由 basename |
+| `PUBLIC_PATH` | `/` | 公共路径 |
+| `ENABLE_MOBILE_REDIRECT` | `true` | 移动端跳转 |
+| `ADD_HOST_GATEWAY` | `true` | 是否添加 host-gateway 映射 |
+
+### Jenkins 启动命令
+
+```bash
+cd /Users/atan/Desktop/work/vs_code_nuwax/nuwax
+
+# 构建镜像
+docker build -t "nuwax-frontend:${BUILD_NUMBER:-local}" .
+
+# 启动容器
+IMAGE_TAG=${BUILD_NUMBER:-local} bash scripts/jenkins-run-container.sh
+```
+
+脚本实际执行的 `docker run` 命令：
 
 ```bash
 docker run -d \
-  --name docker-frontend-1 \
+  --name nuwax-frontend \
+  --restart=always \
   --add-host=host.docker.internal:host-gateway \
   -p 80:80 \
+  -e SERVER_NAME=_ \
+  -e API_PROXY_URL=http://host.docker.internal:8080 \
+  -e BASE_URL= \
+  -e WS_BASE_URL= \
+  -e ROUTER_BASENAME= \
+  -e PUBLIC_PATH=/ \
+  -e ENABLE_MOBILE_REDIRECT=true \
+  -e WITH_CREDENTIALS= \
+  -e APP_ENV=prod \
+  -e APP_VERSION=local \
   nuwax-frontend:local
 ```
 
-健康检查：
+## 6. 验证命令
 
 ```bash
-curl -i http://localhost/healthz
-curl -i http://localhost/runtime-config.js
-curl -i http://localhost/api/tenant/config
+# 健康检查
+curl -fsS http://localhost/healthz
+curl -fsS http://localhost/runtime-config.js
+
+# 后端代理验证
+curl -fsS http://localhost/api/tenant/config
 ```
 
 浏览器验证：
 
-- 打开 `http://localhost/login`。
-- 确认 URL 不再持续增长。
-- 确认登录页显示中文和租户名称。
-- 登录后确认进入 `/home`。
+- 打开 `http://localhost/login`
+- 确认 URL 不再持续增长
+- 确认登录页显示中文和租户名称
+- 登录后确认进入 `/home`
 
-## 6. 注意事项
+## 7. 注意事项
 
 - 如果采用同源代理模式，推荐保持 `BASE_URL` 为空，让浏览器请求 `/api`。
 - 如果必须跨域直连后端，需要同时配置：

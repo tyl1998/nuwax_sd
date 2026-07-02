@@ -23,6 +23,9 @@
 		},
 		{
 			"path": "../../nuwax_computer_deploy"
+		},
+		{
+			"path": "../../platform_deploy"
 		}
 	],
 	"settings": {
