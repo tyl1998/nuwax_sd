@@ -36,51 +36,89 @@
 
 上一条「风景图吧」（id=106）现象完全一致——**稳定复现**。
 
-## 3. 根因
+## 3. 根因（修正版）
 
-**图片工具执行成功，但助手消息在图片返回前约 4.5 秒就被判定 `finished` 并关闭了 SSE**，导致：
+**图片工具执行成功，但助手消息在图片返回前就被判定 `finished` 并关闭了 SSE**，导致：
 
 1. 工具结果没写进消息 → `componentExecutedList=[]`；
 2. 模型“工具后第二轮补全”（把图片写进回答）无法推给前端；
 3. 用户只看到前置话术。
 
 代码落点：`app-platform-agent-core-infra` 的
-`.../component/model/ModelInvoker.java`。
+`.../component/model/ModelInvoker.java`。该模型走原生流式函数调用分支 `streamCall()`，
+且 `internalToolExecutionEnabled=true`（`ModelClientFactory`，由 Spring AI 内部执行工具并做后续补全）。
 
-- 该模型走原生流式函数调用分支 `streamCall()`，且 `internalToolExecutionEnabled=true`（`ModelClientFactory`，由 Spring AI 内部执行工具并做后续补全）。
-- `doMessage()` 的 finish 判断**只比较 `finishReason` 字符串**：
+> ⚠️ 第一版修复（仅在 `doMessage` 内对 finish 判断加 `getToolCalls()` 护栏）**无效**：
+> 因为触发提前关闭的不是 `doMessage`，而是 `streamCall` 的 `doOnComplete` 回调。
+
+### 3.1 真正的触发点：`doOnComplete`
+
+`streamCall()` 在订阅 `chatClientRequestSpec.stream().chatResponse()` 时注册了：
 
 ```java
 // 修复前
-Object finishReason = assistantMessage.getMetadata().get("finishReason");
-if (finishReason != null && !"".equals(finishReason.toString())
-        && !finishReason.equals("tool_call") && !finishReason.equals("tool_calls")) {
-    handleFinish(...);        // -> sink.tryEmitComplete() 提前关闭流
-    finished.set(true);
-}
+.doOnComplete(() -> {
+    if (!finished.get()) {
+        handleFinish(modelContext, sink, messageId, finalMsgSb.toString(), "stop");
+        // -> sink.tryEmitComplete() 提前关闭 SSE
+    }
+})
 ```
 
-- 该模型/OpenAI 兼容网关把「前置文本 + tool_call」放在同一段返回，但 `finish_reason` 上报为 `stop`（而非 `tool_calls`），于是此处**误判为已结束**，`handleFinish()` 内 `sink.tryEmitComplete()` 提前完成流。
-- 随后 Spring AI 内部执行 `image_generation`（拿到 URL）并进行第二轮补全，但 sink 已 complete，后续 `tryEmitNext` 全被丢弃；消息也已在 finish 时刻定稿，`componentExecutedList` 仍为空。
+`doOnComplete` **只判断 `finished` 是否为 false，不感知是否有待执行的工具调用**。
+当 Hy3 把「前置文本 + tool_call」放在同一段返回、且 `finish_reason` 上报为 `stop`（而非 `tool_calls`）时：
 
-**核心缺陷**：finish 判断没有校验 `assistantMessage.getToolCalls()` 是否仍有待执行的工具调用，只信任了 `finishReason` 文本。
+- 第一流片段（首轮，含 tool_call）在 Spring AI 内部执行工具 + 第二轮补全**之前**就结束，
+- `doOnComplete` 在 `finished==false` 时立即 `handleFinish` 并 `sink.tryEmitComplete()`，
+- 此时图片尚未生成（日志佐证：executing `04:52:16.966` → executed `04:52:21.573`，而 SSE 在 `04:52:16.973` 已 completed），
+- 后续工具结果与第二轮补全的 `tryEmitNext` 全部被丢弃，消息在 finish 时刻定稿，`componentExecutedList` 仍为空。
 
-## 4. 修复
+**核心缺陷**：首轮流结束 ≠ 整个对话结束。`doOnComplete` 没有校验“是否仍有工具在 Spring AI 内部执行 / 还有后续补全轮次”，只信任 `finished` 标志。
+
+## 4. 修复（修正版）
 
 文件：`app-platform-modules/app-platform-agent/app-platform-agent-core-infra/src/main/java/com/xspaceagi/agent/core/infra/component/model/ModelInvoker.java`
-方法：`doMessage(...)`
+两处：新增 `pendingToolCalls` 标志、`doOnComplete` 跳过、`doMessage` 写入该标志。
 
-在 finish 判断中增加“当前 chunk 仍带 tool_calls 则不 finish”的护栏，让真正的结束交由 `doOnComplete`（整段含工具后补全结束时）处理：
+### 4.1 `streamCall`：新增 pendingToolCalls 标志，并让 doOnComplete 跳过
 
 ```java
-// 修复后
-Object finishReason = assistantMessage.getMetadata().get("finishReason");
-// 某些模型/OpenAI 兼容网关会把 assistant 文本与 tool_call 放在同一段返回，
-// 却上报非工具类的 finishReason（如 "stop"）。若此处 finish，会在 Spring AI
-// 内部工具执行 + 工具后补全之前就 complete 掉 SSE，导致工具结果（如 image_generation
-// 的图片 URL）永远进不了消息。只要当前 chunk 仍带待执行 tool_calls，就不 finish；
-// 真正的结束交由 doOnComplete 处理。
+AtomicBoolean finished = new AtomicBoolean(false);
+// 当前流式 assistant 消息仍带待执行 tool_calls 时置位。
+// 某些模型（如 Tencent Hy3）会把 tool_calls 与 finishReason="stop" 同段返回，
+// 首轮流片段在 Spring AI 内部执行工具 + 第二轮补全之前就结束，此时不能 finalize。
+AtomicBoolean pendingToolCalls = new AtomicBoolean(false);
+
+chatClientRequestSpec.stream().chatResponse()
+  ...
+  .doOnComplete(() -> {
+      if (finished.get() || pendingToolCalls.get()) {
+          // finished==true：已在 doMessage 内 finalize。
+          // pendingToolCalls==true：流结束时尚有工具在 Spring AI 内部执行，
+          //   真正的结束是工具后补全轮次完成，由它驱动 finalize。
+          log.info("stream doOnComplete skipped: finished={}, pendingToolCalls={}", finished.get(), pendingToolCalls.get());
+          return;
+      }
+      log.info("stream doOnComplete finalize: finished={}, pendingToolCalls={}", finished.get(), pendingToolCalls.get());
+      handleFinish(modelContext, sink, messageId, finalMsgSb.toString(), "stop");
+  })
+  .subscribe(chatResponse -> {
+      ...
+      doMessage(modelContext, sink, messageId, assistantMessage, assistantMessage.getText(),
+                finalMsgSb, thinking, finished, null, pendingToolCalls);
+  }, ...);
+```
+
+### 4.2 `doMessage`：写入 pendingToolCalls
+
+方法签名新增 `AtomicBoolean pendingToolCalls` 参数（同步更新 `customReactStreamCall` 调用处传 `null`）。
+在 finish 判断处：
+
+```java
 boolean hasPendingToolCalls = CollectionUtils.isNotEmpty(assistantMessage.getToolCalls());
+if (pendingToolCalls != null) {
+    pendingToolCalls.set(hasPendingToolCalls);
+}
 if (!hasPendingToolCalls && finishReason != null && !"".equals(finishReason.toString())
         && !finishReason.equals("tool_call") && !finishReason.equals("tool_calls")) {
     handleFinish(modelContext, sink, messageId, msgSb.toString(), finishReason.toString());
@@ -88,14 +126,26 @@ if (!hasPendingToolCalls && finishReason != null && !"".equals(finishReason.toSt
 }
 ```
 
-说明：`CollectionUtils` 为 `org.apache.commons.collections4.CollectionUtils`（该文件已有引用），与上文 L443 的既有用法一致。
+效果：首轮若带 tool_calls，则 `pendingToolCalls=true`；首轮流结束时 `doOnComplete` 跳过 finalize，
+等待 Spring AI 内部执行工具并流式第二轮补全；第二轮以 `finishReason="stop"` 且无 tool_calls 到达时，
+`doMessage` 内正常 `handleFinish` 并 `sink.tryEmitComplete()`，消息包含工具结果与图片 URL。
+
+说明：`customReactStreamCall` 分支（`functionCall != StreamCallSupported`，手动 react 调工具）不走 Spring AI 内部执行，
+调用处传 `pendingToolCalls=null`，行为不受影响。
 
 ## 5. 验证
 
-- 编译：`mvn -o -pl app-platform-modules/app-platform-agent/app-platform-agent-core-infra -am compile` → **BUILD SUCCESS**。
-- 建议回归：问答型智能体 + 图像 MCP，发送「生成一张宠物图」，确认：
-  - SSE 不再在工具执行前 finish；
-  - 消息 `componentExecutedList` 含 image_generation 结果；
+- 编译（模块）：`mvn -o -pl app-platform-modules/app-platform-agent/app-platform-agent-core-infra -am compile` → **BUILD SUCCESS**。
+- 打包（镜像）：`mvn -o -pl app-platform-bootstrap/app-platform-web-bootstrap -am package -DskipTests -Pprod`
+  → 产出 `app-platform-bootstrap/app-platform-web-bootstrap/target/app-platform-web-bootstrap-*.jar`。
+- **尚未部署**：本环境堡垒（lg.sh）仅允许命令执行、无法传输文件，280MB jar 无法经堡垒推送。
+  需在能访问后端机器的环境用仓库自带脚本部署：
+  `scripts/build-runtime-image.sh` + `scripts/deploy-runtime-container.sh`
+  （或直接将 jar 拷到 `172.17.54.139` 容器 `/app/app.jar` 并 `docker restart nuwax-backend`）。
+- 回归：问答型智能体 + 图像 MCP，发送「生成一张宠物图」，确认：
+  - 日志出现 `stream doOnComplete skipped: finished=false, pendingToolCalls=true`；
+  - 工具执行结束后出现 `stream doOnComplete finalize`（或 doMessage 内 finalize），SSE 不再提前 complete；
+  - DB `conversation_message` 该条 `componentExecutedList` 含 image_generation 结果、`finished=true`；
   - 最终回答包含图片。
 
 ## 6. 后续待确认（非本次代码改动范围）
