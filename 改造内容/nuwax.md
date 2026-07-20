@@ -122,6 +122,27 @@
 - 当前租户 `templateConfig.language` 为 `null`。
 - 首屏默认语言已为 `zh-CN`。
 
+### 3.6 Nginx 请求体大小限制（413 修复）
+
+修改文件：
+
+- `k8s/default.conf.template`
+
+改造内容：
+
+- 在 `server` 块中新增 `client_max_body_size 5m;`。
+
+解决的问题：
+
+- 之前模板未配置 `client_max_body_size`，Nginx 使用默认 `1m` 限制。
+- 超出 1m 的请求（如大文件上传、较大的接口请求体）会返回 `413 Request Entity Too Large`。
+- 显式设置为 `5m` 后，单请求体上限放宽到 5MB，避免正常业务被拦截。
+
+注意：
+
+- 配置来源是 `k8s/default.conf.template`，由 `Dockerfile` 第 22 行 `COPY ./k8s/default.conf.template /etc/nginx/templates/default.conf.template` 注入镜像，并经 `docker-entrypoint.d/40-runtime-config.sh` 做 `envsubst` 渲染。
+- 不要修改 `nuwax_deploy/docker/config/nginx.conf`，那条链路不是前端镜像实际使用的配置。
+
 ## 4. 当前运行结果
 
 当前本地验证环境：
@@ -250,3 +271,4 @@ curl -fsS http://localhost/api/tenant/config
 ## 7. 版本记录
 
 - 2026-06-22：新增 nuwax 单容器部署、运行时配置、同源代理、登录重定向与 i18n 默认中文改造记录。
+- 2026-07-09：Nginx 新增 `client_max_body_size 5m;`，修复 `413 Request Entity Too Large`。
