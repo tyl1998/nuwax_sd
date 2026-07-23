@@ -85,3 +85,55 @@
 	- 允许携带凭证（credentials）
 	- 跨站 Cookie 需满足 `SameSite=None; Secure`（通常要求 HTTPS）
 	- SSO / CAS 回调地址、站点域名与前端实际访问域保持一致
+
+---
+
+## 工作区结构（2026-07-23）
+
+### 目录布局
+
+```
+/Users/atan/Desktop/work/vs_code_nuwax/
+├── sd/                     ← 当前仓库：文档沉淀、链路梳理、方案设计
+├── nuwax-backend/          ← 后端 Java 工程（Spring Boot）
+├── nuwax/                  ← 前端工程（React / Umi / Ant Design）
+├── nuwaclaw/               ← 桌面客户端（Electron）
+├── mcp-proxy/              ← MCP 代理服务
+├── rcoder/                 ← 沙箱 Agent 容器运行时
+├── nuwax_deploy/           ← Docker Compose 一键部署包
+├── nuwax_computer_deploy/  ← Computer Agent 容器部署包
+├── nuwax-cli/              ← CLI 工具
+├── nuwax-file-server/      ← 文件服务（Node.js Express）
+└── nuwax-mobile/           ← 移动端
+```
+
+### 代码修改落点
+
+- **文档 / 方案 / 链路分析** → 在 `sd/` 内修改
+- **后端代码** → 在 `../nuwax-backend/` 内修改
+- **前端代码** → 在 `../nuwax/` 内修改
+- **其他服务** → 在上层对应目录内修改
+
+### 远程仓库
+
+每个项目都有两个远程仓库：
+
+| 远程名 | 用途 | 地址示例 |
+|--------|------|---------|
+| `origin` | 公司 SCM（scm.starbucks.com） | `git@scm.starbucks.com:atan/stai-backend.git` |
+| `github` | GitHub 个人备份 | `git@github.com:tyl1998/nuwax-backend.git` |
+
+推送时需同时推送到两个远程：
+
+```bash
+git push origin main && git push github main
+```
+
+### 部署环境
+
+| 服务器 IP | 用途 |
+|----------|------|
+| `172.17.54.139` | 基础服务（backend、mcp-proxy、redis 代理等） |
+| `172.17.52.69` | 数据库（MySQL、Redis、MinIO、ES、Milvus） |
+| `172.17.52.70` | 通用智能体（rcoder、nuwax-file-server、claude-code） |
+| `10.94.77.42:18080` | 办公网入口（nginx 反代到 backend:8080） |
